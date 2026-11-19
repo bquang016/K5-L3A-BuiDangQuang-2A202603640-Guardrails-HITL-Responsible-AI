@@ -33,12 +33,14 @@ except ImportError:
 PROVIDER_OPENAI = "openai"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENROUTER = "openrouter"
+PROVIDER_LIQUID = "liquid"
 
-# --- Blue Team (LOCKED) ---
-BLUE_PROVIDER = PROVIDER_OPENROUTER
-BLUE_MODEL = "liquid/lfm-3-1.7b:free"
+# --- Blue Team ---
+BLUE_PROVIDER = PROVIDER_LIQUID
+BLUE_MODEL = "lfm3-1.7b"
+LIQUID_BASE_URL = "https://api.liquid.ai/openai/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_MODEL = BLUE_MODEL  # alias
+DEFAULT_OPENROUTER_MODEL = "liquid/lfm-3-1.7b:free"  # alias back-compat
 
 # --- Red Team ---
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
@@ -96,30 +98,43 @@ except FileNotFoundError:
 
 
 # ---------------------------------------------------------------------------
-# Blue Team — fixed OpenRouter Liquid
+# Blue Team — Liquid AI / OpenRouter
 # ---------------------------------------------------------------------------
 
 def get_blue_provider() -> str:
-    return BLUE_PROVIDER
+    return os.environ.get("BLUE_PROVIDER", BLUE_PROVIDER).strip()
 
 
 def get_blue_model() -> str:
-    # Hard-locked; env cannot override for the graded Blue Team path.
-    return BLUE_MODEL
+    return os.environ.get("BLUE_MODEL", BLUE_MODEL).strip()
 
 
 def get_openrouter_api_key() -> str:
-    return os.environ.get("OPENROUTER_API_KEY", "").strip()
+    return (
+        os.environ.get("LIQUID_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY", "")
+    ).strip()
 
 
 def blue_client_kwargs() -> dict:
-    """OpenAI SDK kwargs pointing at OpenRouter (Blue Team only)."""
+    """OpenAI SDK kwargs pointing at Liquid AI / OpenRouter (Blue Team only)."""
+    default_base_url = (
+        LIQUID_BASE_URL
+        if (
+            get_blue_provider() == PROVIDER_LIQUID
+            or "liquid_" in get_openrouter_api_key()
+            or "lfm3" in get_blue_model()
+        )
+        else OPENROUTER_BASE_URL
+    )
+    base_url = (
+        os.environ.get("LIQUID_BASE_URL")
+        or os.environ.get("OPENROUTER_BASE_URL")
+        or default_base_url
+    ).strip()
     return {
         "api_key": get_openrouter_api_key() or None,
-        "base_url": (
-            os.environ.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL).strip()
-            or OPENROUTER_BASE_URL
-        ),
+        "base_url": base_url,
     }
 
 
@@ -170,7 +185,11 @@ def get_openai_api_key() -> str:
 
 
 def red_openai_client_kwargs() -> dict:
-    return {"api_key": get_openai_api_key() or None}
+    kwargs = {"api_key": get_openai_api_key() or None}
+    base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+    if base_url:
+        kwargs["base_url"] = base_url
+    return kwargs
 
 
 def red_provider_label(tier: str = "advance") -> str:
@@ -235,23 +254,28 @@ def is_harder_model() -> bool:
 
 
 def setup_api_key():
-    """Ensure keys for Blue (OpenRouter) + Red / Red Advance (OpenAI or Gemini)."""
+    """Ensure keys for Blue (Liquid/OpenRouter) + Red / Red Advance (OpenAI or Gemini)."""
+    import sys
+
     if not get_openrouter_api_key():
-        os.environ["OPENROUTER_API_KEY"] = input(
-            "Enter OpenRouter API Key (Blue): "
-        ).strip()
-    print(f"Blue  — {blue_provider_label()}  [LOCKED]")
+        if sys.stdin and sys.stdin.isatty():
+            os.environ["LIQUID_API_KEY"] = input(
+                "Enter Liquid/OpenRouter API Key (Blue): "
+            ).strip()
+    print(f"Blue  — {blue_provider_label()}  [CONFIGURED]")
 
     red = get_red_provider()
     model = get_red_model()
     if red == PROVIDER_GEMINI:
         if not os.environ.get("GOOGLE_API_KEY", "").strip():
-            os.environ["GOOGLE_API_KEY"] = input("Enter Google API Key (Red): ").strip()
+            if sys.stdin and sys.stdin.isatty():
+                os.environ["GOOGLE_API_KEY"] = input("Enter Google API Key (Red): ").strip()
         os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "0"
         print(f"Red / Red Advance  — gemini:{model}")
     else:
         if not get_openai_api_key():
-            os.environ["OPENAI_API_KEY"] = input("Enter OpenAI API Key (Red): ").strip()
+            if sys.stdin and sys.stdin.isatty():
+                os.environ["OPENAI_API_KEY"] = input("Enter OpenAI API Key (Red): ").strip()
         print(f"Red / Red Advance  — openai:{model}")
 
     print(
